@@ -4,6 +4,8 @@ import pandas as pd
 from scipy.io import loadmat
 from sklearn import model_selection
 from toolbox_02450 import rlr_validate
+from matplotlib import pyplot as plt
+from scipy.linalg import svd
 
 from matplotlib.pylab import (figure, semilogx, loglog, xlabel, ylabel, legend, 
                            title, subplot, show, grid)
@@ -59,7 +61,53 @@ def dataprep ():
     # .to_numpy()
 
     print("Data loaded succesfully. \n")
-    return X, Y, class_labels
+    return X, Y, class_labels, data_values, Seasons
+
+# Re-computing PCA for 'Season' influence:
+def PCA(data_values, labels):
+    #Subtrackting doy from the dataset to reduce noise:
+    X_pca = np.delete(data_values, np.s_[9], 1)
+
+    # Normalizing the data:
+    N = len(data_values[:,0])
+    Y = (X - X.mean(axis=0)*np.ones((N,1))) / X.std(axis=0)*np.ones((N,1))
+
+    # Running the Single Value Decompositioning (SVD)
+    U, S, V = svd(Y,full_matrices=False)
+
+    # Compute variance explained by principal components
+    rho = (S*S) / (S*S).sum()
+
+    fig1 = plt.figure(figsize=(10,8), facecolor='w')
+    ax = fig1.add_subplot(projection='3d')
+
+    # Computing the dot product 
+    for i in range(Y.shape[0]):
+        x = V[0,:] @ Y[i,:].T
+        y = V[1,:] @ Y[i,:].T
+        z = V[2,:] @ Y[i,:].T
+
+        if labels[i] == 1:
+            ax.scatter(x,y,z, marker='o', color='gold', s=20)
+        elif labels[i] == 2:
+            ax.scatter(x,y,z, marker='o', color='dodgerblue', s=20)
+        elif labels[i] == 3:
+            ax.scatter(x,y,z, marker='o', color='limegreen', s=20)
+        else:
+            ax.scatter(x,y,z, marker='o', color='darkorange', s=20)
+
+    ax.set_xlabel('\nPC1', fontsize = 15, linespacing=1)
+    ax.set_ylabel('\nPC2', fontsize = 15, linespacing=2)
+    ax.set_zlabel('\nPC3 ', fontsize = 15, linespacing=2)
+    ax.view_init(25,-50)
+    # creating dummy plot for legend applyance: 
+    proxy1 = plt.Line2D([0],[0], linestyle="none", color='gold', marker = 'o')
+    proxy2 = plt.Line2D([0],[0], linestyle="none", color='dodgerblue', marker = 'o')
+    proxy3 = plt.Line2D([0],[0], linestyle="none", color='limegreen', marker = 'o')
+    proxy4 = plt.Line2D([0],[0], linestyle="none", color='darkorange', marker = 'o')
+    ax.legend([proxy1, proxy2, proxy3, proxy4], ['Winter', 'Spring', 'Summer', 'Fall' ], numpoints = 1)
+
+    plt.show()
 
 # Linear regression model
 def linear_regression(X, y, class_labels, K, K_inner, lambdas):
@@ -172,15 +220,18 @@ def linear_regression(X, y, class_labels, K, K_inner, lambdas):
 
 
 
+
 #############################################
 ####             Main code               ####
 #############################################
 
 #extracting base data
-X, y, class_labels = dataprep()
+X, y, class_labels, data_values, Seasons = dataprep()
 N, M = X.shape   
 
-print(class_labels)
+# Analysing 'Seasons' influence with PCA as for P.1:
+PCA(data_values, Seasons)
+
 
 # Linear regression model, part A:
 K = 10
@@ -188,6 +239,3 @@ K_inner = K
 lambdas = np.power(10.,range(-2,9))
 linear_regression(X, y, class_labels, K, K_inner, lambdas)
 
-    
-
-# %%
