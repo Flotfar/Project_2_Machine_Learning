@@ -236,12 +236,20 @@ def linear_regression(X, y, attributes, K, K_inner, lambdas):
 
 
 #### Extracting base data:
-X, y, attributes, X_raw, one_k = dataprep()
+X, y, attributes, data_values, one_k = dataprep()
 N, M = X.shape   
 
 
 #### Analysing 'Seasons' influence with PCA as for P.1:
-# PCA(X_raw, one_k)
+# PCA(data_values, one_k)
+
+
+#### Linear regression model, part A:
+K = 10
+K_inner = K
+lambdas = np.power(10.,range(-1,8))
+linear_regression(X, y, attributes, K, K_inner, lambdas)
+
 
 
 #### Linear regression model, part A:
