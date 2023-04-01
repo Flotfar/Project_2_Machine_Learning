@@ -3,9 +3,11 @@ import numpy as np
 import pandas as pd
 from scipy.io import loadmat
 from sklearn import model_selection
+from sklearn.preprocessing import OneHotEncoder
 from toolbox_02450 import rlr_validate
 from matplotlib import pyplot as plt
 from scipy.linalg import svd
+
 
 from matplotlib.pylab import (figure, semilogx, loglog, xlabel, ylabel, legend, 
                            title, subplot, show, grid)
@@ -19,15 +21,16 @@ from matplotlib.pylab import (figure, semilogx, loglog, xlabel, ylabel, legend,
 
 # Season categorizing (winter=1, spring=2, summer=3, fall=4)
 def get_season(day):
-        if day >= 355 or day < 81:
-            return 1
-        elif day < 173:
-            return 2
-        elif day < 266:
-            return 3
-        else:
-            return 4
 
+    if day <= 59 or day > 334:
+        return 'winter'
+    elif day <= 151:
+        return 'spring'
+    elif day <= 243:
+        return 'summer'
+    else:
+        return 'fall'
+ 
 # Loading data in and creating X, Y and class_labels 
 def dataprep ():
     # Loading file into str. array
@@ -38,21 +41,29 @@ def dataprep ():
     data_values = raw_data[1:,:].astype(float)
     labels_raw = raw_data[0,:]
 
-    #Subtrackting doy and ozone from the dataset, wich will be added later:
-    X_raw = np.delete(data_values, np.s_[0,9], 1)
-    class_labels = np.delete(labels_raw, np.s_[0,9])
+    # Subtrackting unsignificant attributes '[2,3,6,8]' for ozone prediction,
+    # and further subtracting doy'9' and ozone'0' from the dataset, wich will be added later:
+    X_raw = np.delete(data_values, np.s_[0,2,3,6,8,9], 1)
+    attributes = np.delete(labels_raw, np.s_[0,2,3,6,8,9])
 
     #Standardizing the X dataset:
     standard_X = (X_raw - np.mean(X_raw, axis=0)) / np.std(X_raw, axis=0)
 
-    # Categorizing the datapoints with season and adding it to the array
-    Seasons = np.array([get_season(day) for day in data_values[0:, 9]], copy=False, subok=True, ndmin=2).T
-    X = np.append(standard_X, Seasons, axis=1)
+    # One-of-k encoding with season and adding it to the X array
+    seasons = np.array([get_season(day) for day in data_values[0:, 9]])
+    encoder = OneHotEncoder(sparse=False)
+    one_k = encoder.fit_transform(seasons.reshape(-1, 1))
+    X = np.append(standard_X, one_k, axis=1)
+    # exporting the season category array
+    season_categories = encoder.categories_[0]
 
-    #Extending class_labels with seasons:
-    label = list(class_labels)
-    label.append('seasons')
-    class_labels = np.asarray(label)
+    # Seasons = np.array([get_season(day) for day in data_values[0:, 9]], copy=False, subok=True, ndmin=2).T
+    
+
+    #Extending attributes with seasons:
+    label = list(attributes)
+    label = np.concatenate((label, season_categories))
+    attributes = np.asarray(label)
 
     # Creating Y column
     Y_raw = data_values[:, 0]
@@ -61,22 +72,20 @@ def dataprep ():
     # .to_numpy()
 
     print("Data loaded succesfully. \n")
-    return X, Y, class_labels, data_values, Seasons
+    return X, Y, attributes, data_values, one_k
 
 # Re-computing PCA for 'Season' influence:
-def PCA(data_values, labels):
-    #Subtrackting doy from the dataset to reduce noise:
+def PCA(data_values, one_k):
+    
+    # Subtracting doy fromthe dataset, to reduce noise:
     X_pca = np.delete(data_values, np.s_[9], 1)
 
     # Normalizing the data:
-    N = len(data_values[:,0])
-    Y = (X - X.mean(axis=0)*np.ones((N,1))) / X.std(axis=0)*np.ones((N,1))
+    N = len(X_pca)
+    Y = (X_pca - X_pca.mean(axis=0)*np.ones((N,1))) / X_pca.std(axis=0)*np.ones((N,1))
 
     # Running the Single Value Decompositioning (SVD)
     U, S, V = svd(Y,full_matrices=False)
-
-    # Compute variance explained by principal components
-    rho = (S*S) / (S*S).sum()
 
     fig1 = plt.figure(figsize=(10,8), facecolor='w')
     ax = fig1.add_subplot(projection='3d')
@@ -87,11 +96,11 @@ def PCA(data_values, labels):
         y = V[1,:] @ Y[i,:].T
         z = V[2,:] @ Y[i,:].T
 
-        if labels[i] == 1:
+        if one_k[i, 3] == 1:
             ax.scatter(x,y,z, marker='o', color='gold', s=20)
-        elif labels[i] == 2:
+        elif one_k[i, 1] == 1:
             ax.scatter(x,y,z, marker='o', color='dodgerblue', s=20)
-        elif labels[i] == 3:
+        elif one_k[i, 2] == 1:
             ax.scatter(x,y,z, marker='o', color='limegreen', s=20)
         else:
             ax.scatter(x,y,z, marker='o', color='darkorange', s=20)
@@ -105,17 +114,17 @@ def PCA(data_values, labels):
     proxy2 = plt.Line2D([0],[0], linestyle="none", color='dodgerblue', marker = 'o')
     proxy3 = plt.Line2D([0],[0], linestyle="none", color='limegreen', marker = 'o')
     proxy4 = plt.Line2D([0],[0], linestyle="none", color='darkorange', marker = 'o')
-    ax.legend([proxy1, proxy2, proxy3, proxy4], ['Winter', 'Spring', 'Summer', 'Fall' ], numpoints = 1)
+    ax.legend([proxy1, proxy2, proxy3, proxy4], ['Winter', 'Spring', 'Summer', 'Fall'], numpoints = 1)
 
     plt.show()
 
 # Linear regression model
-def linear_regression(X, y, class_labels, K, K_inner, lambdas):
+def linear_regression(X, y, attributes, K, K_inner, lambdas):
     
     # Applying method from script 8.1.1
     # Adding offset attribute to X
     X_off = np.concatenate((np.ones((X.shape[0],1)),X),1)
-    attributeNames = ['offset'] + list(class_labels)
+    attributeNames = ['offset'] + list(attributes)
     M_off = M+1
 
     # Create crossvalidation partition for evaluation
@@ -225,17 +234,18 @@ def linear_regression(X, y, class_labels, K, K_inner, lambdas):
 ####             Main code               ####
 #############################################
 
-#extracting base data
-X, y, class_labels, data_values, Seasons = dataprep()
+
+#### Extracting base data:
+X, y, attributes, X_raw, one_k = dataprep()
 N, M = X.shape   
 
-# Analysing 'Seasons' influence with PCA as for P.1:
-PCA(data_values, Seasons)
+
+#### Analysing 'Seasons' influence with PCA as for P.1:
+# PCA(X_raw, one_k)
 
 
-# Linear regression model, part A:
+#### Linear regression model, part A:
 K = 10
 K_inner = K
-lambdas = np.power(10.,range(-2,9))
-linear_regression(X, y, class_labels, K, K_inner, lambdas)
-
+lambdas = np.power(10.,range(-1,8))
+linear_regression(X, y, attributes, K, K_inner, lambdas)
