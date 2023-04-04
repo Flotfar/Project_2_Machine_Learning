@@ -185,47 +185,43 @@ def linear_regression(X, y, attributes, K, K_inner, lambdas):
 
         # Display the results for the last cross-validation fold
         if i == K-1:
+            # Adjust figure size
             figure(figsize=(12,8))
+            
+            # Adjust horizontal spacing between subplots
+            plt.subplots_adjust(wspace=0.5)
+
             subplot(1,2,1)
             semilogx(lambdas,mean_w_vs_lambda.T[:,1:],'.-')
-            xlabel('Regularization factor')
-            ylabel('Mean Coefficient Values')
+            xlabel(r"$\lambda$", fontsize=16)
+            ylabel(r"$w_{i}$", fontsize=16)
             grid()
             legend(attributeNames[1:], loc='best')
 
             
             subplot(1,2,2)
-            title('Optimal lambda: 1e{0}'.format(np.log10(opt_lambda)))
             loglog(lambdas,train_err_vs_lambda.T,'b.-',lambdas,test_err_vs_lambda.T,'r.-')
-            xlabel('Regularization factor')
-            ylabel('Squared error (crossvalidation)')
+            xlabel(r"$\lambda$", fontsize=16)
+            ylabel('SE', fontsize=16)
             legend(['Train error','Validation error'])
             grid()
+
+            # Adding line as marker for optimal lambda value:
+            subplot(1,2,1).axvline(x=opt_lambda, color='red', linestyle='--', linewidth=1.2)
+            subplot(1,2,2).axvline(x=opt_lambda, color='red', linestyle='--', linewidth=1.2)
         
         i+=1
     
     show()
 
-    # To inspect the used indices, use these print statements
-    #print('Cross validation fold {0}/{1}:'.format(k+1,K))
-    #print('Train indices: {0}'.format(train_index))
-    #print('Test indices: {0}\n'.format(test_index))
-
-    # Display results
-    # print('Linear regression without feature selection:')
-    # print('- Training error: {0}'.format(Error_train.mean()))
-    # print('- Test error:     {0}'.format(Error_test.mean()))
-    # print('- R^2 train:     {0}'.format((Error_train_nofeatures.sum()-Error_train.sum())/Error_train_nofeatures.sum()))
-    # print('- R^2 test:     {0}\n'.format((Error_test_nofeatures.sum()-Error_test.sum())/Error_test_nofeatures.sum()))
-    # print('Regularized linear regression:')
-    # print('- Training error: {0}'.format(Error_train_rlr.mean()))
-    # print('- Test error:     {0}'.format(Error_test_rlr.mean()))
-    # print('- R^2 train:     {0}'.format((Error_train_nofeatures.sum()-Error_train_rlr.sum())/Error_train_nofeatures.sum()))
-    # print('- R^2 test:     {0}\n'.format((Error_test_nofeatures.sum()-Error_test_rlr.sum())/Error_test_nofeatures.sum()))
-
-    # print('Weights in last fold:')
-    # for m in range(M):
-    #     print('{:>15} {:>15}'.format(attributeNames[m], np.round(w_rlr[m,-1],2)))
+    print("RESULTS: \n")
+    print("Lamdas vs Generalization error:")
+    print([f"{lamb:.0e}" for lamb in lambdas])
+    print([round(test_err, 3) for test_err in test_err_vs_lambda])
+    print(" \n")
+    print('Weights in last fold:')
+    for m in range(M):
+        print('{:>15} {:>15}'.format(attributeNames[m+1], np.round(w_rlr[m,-1],2)))
 
 
 
@@ -247,7 +243,7 @@ N, M = X.shape
 #### Linear regression model, part A:
 K = 10
 K_inner = K
-lambdas = np.power(10.,range(-1,8))
+lambdas = np.power(10.,range(-2,8))
 linear_regression(X, y, attributes, K, K_inner, lambdas)
 
 
