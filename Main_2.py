@@ -1,18 +1,16 @@
 
 import numpy as np
 import pandas as pd
-from scipy.io import loadmat
+import time
+import torch
 from sklearn import model_selection
 from sklearn.preprocessing import OneHotEncoder
-from toolbox_02450 import rlr_validate
+from toolbox_02450 import rlr_validate, train_neural_net, draw_neural_net
 from matplotlib import pyplot as plt
 from scipy.linalg import svd
-
-
 from matplotlib.pylab import (figure, semilogx, loglog, xlabel, ylabel, legend, 
                            title, subplot, show, grid)
-
-
+from tqdm import tqdm
 
 #############################################
 ####             Functions               ####
@@ -125,22 +123,16 @@ def linear_regression(X, y, attributes, K, K_inner, lambdas):
     # Adding offset attribute to X
     X_off = np.concatenate((np.ones((X.shape[0],1)),X),1)
     attributeNames = ['offset'] + list(attributes)
+    N, M = X.shape
     M_off = M+1
 
     # Create crossvalidation partition for evaluation
     CV = model_selection.KFold(K, shuffle=True)
 
-    # Initialize variables
-    Error_train = np.empty((K,1))
-    Error_test = np.empty((K,1))
-    Error_train_rlr = np.empty((K,1))
-    Error_test_rlr = np.empty((K,1))
-    Error_train_nofeatures = np.empty((K,1))
-    Error_test_nofeatures = np.empty((K,1))
+    # Creating empty matrices for the results
     w_rlr = np.empty((M_off,K))
     mu = np.empty((K, M))
     sigma = np.empty((K, M))
-    w_noreg = np.empty((M_off,K))
 
     i=0
     for train_index, test_index in CV.split(X,y):
@@ -148,40 +140,25 @@ def linear_regression(X, y, attributes, K, K_inner, lambdas):
         # extract training and test set for current CV fold
         X_train = X_off[train_index]
         y_train = y[train_index]
-        X_test = X_off[test_index]
-        y_test = y[test_index]
 
 
         ###### Inner fold, validation
         opt_val_err, opt_lambda, mean_w_vs_lambda, train_err_vs_lambda, test_err_vs_lambda = rlr_validate(X_train, y_train, lambdas, K_inner)
         ######
 
+
         mu[i, :] = np.mean(X_train[:, 1:], 0)
         sigma[i, :] = np.std(X_train[:, 1:], 0)
         
         X_train[:, 1:] = (X_train[:, 1:] - mu[i, :] ) / sigma[i, :] 
-        X_test[:, 1:] = (X_test[:, 1:] - mu[i, :] ) / sigma[i, :] 
         
         Xty = X_train.T @ y_train
         XtX = X_train.T @ X_train
-        
-        # Compute mean squared error without using the input data at all
-        Error_train_nofeatures[i] = np.square(y_train-y_train.mean()).sum(axis=0)/y_train.shape[0]
-        Error_test_nofeatures[i] = np.square(y_test-y_test.mean()).sum(axis=0)/y_test.shape[0]
 
         # Estimate weights for the optimal value of lambda, on entire training set
         lambdaI = opt_lambda * np.eye(M_off)
         lambdaI[0,0] = 0 # Do no regularize the bias term
         w_rlr[:,i] = np.linalg.solve(XtX+lambdaI,Xty).squeeze()
-        # Compute mean squared error with regularization with optimal lambda
-        Error_train_rlr[i] = np.square(y_train-X_train @ w_rlr[:,i]).sum(axis=0)/y_train.shape[0]
-        Error_test_rlr[i] = np.square(y_test-X_test @ w_rlr[:,i]).sum(axis=0)/y_test.shape[0]
-
-        # Estimate weights for unregularized linear regression, on entire training set
-        w_noreg[:,i] = np.linalg.solve(XtX,Xty).squeeze()
-        # Compute mean squared error without regularization
-        Error_train[i] = np.square(y_train-X_train @ w_noreg[:,i]).sum(axis=0)/y_train.shape[0]
-        Error_test[i] = np.square(y_test-X_test @ w_noreg[:,i]).sum(axis=0)/y_test.shape[0]
 
         # Display the results for the last cross-validation fold
         if i == K-1:
@@ -198,7 +175,6 @@ def linear_regression(X, y, attributes, K, K_inner, lambdas):
             grid()
             legend(attributeNames[1:], loc='best')
 
-            
             subplot(1,2,2)
             loglog(lambdas,train_err_vs_lambda.T,'b.-',lambdas,test_err_vs_lambda.T,'r.-')
             xlabel(r"$\lambda$", fontsize=16)
@@ -215,13 +191,125 @@ def linear_regression(X, y, attributes, K, K_inner, lambdas):
     show()
 
     print("RESULTS: \n")
+    
     print("Lamdas vs Generalization error:")
     print([f"{lamb:.0e}" for lamb in lambdas])
     print([round(test_err, 3) for test_err in test_err_vs_lambda])
+    
     print(" \n")
-    print('Weights in last fold:')
+    
+    print('Weights of regularized coefficients:')
     for m in range(M):
-        print('{:>15} {:>15}'.format(attributeNames[m+1], np.round(w_rlr[m,-1],2)))
+        print('{:>15} {:>15}'.format(attributeNames[m+1], np.round(w_rlr[m+1,-1],3)))
+
+# Artificial neural network (ANN) model
+def ANN(X, y, K, K_inner, lambdas, h_units):
+
+    N, M = X.shape
+
+    # Create crossvalidation partition for evaluation
+    CV = model_selection.KFold(K, shuffle=True)
+    
+    # Parameters for neural network classifier
+    
+    n_replicates = 2        # number of networks trained in each k-fold
+    max_iter = 10000         # stop criterion 2 (max epochs in training)
+    
+    # Defining loss function
+    loss_fn = torch.nn.BCELoss()
+
+    # Defining model
+    model = lambda: torch.nn.Sequential(
+                    torch.nn.Linear(M, h_units), #M features to H hiden units
+                    # 1st transfer function, either Tanh or ReLU:
+                    torch.nn.Tanh(),                            #torch.nn.ReLU(),
+                    torch.nn.Linear(h_units, 1), # H hidden units to 1 output neuron
+                    torch.nn.Sigmoid() # final tranfer function
+                    )
+
+    print('Initiating training of model of type:\n{}\n'.format(str(model())))
+    start_time = time.time()
+
+    # Starting up the training loop:
+    # Initiating outer loop
+    for i, (train_index, test_index) in tqdm(enumerate(CV.split(X,y))): 
+        print('\n Outer fold: {0}/{1}'.format(i+1,K))
+
+
+        # Fetch appropriate training and test data
+        X_train, y_train, X_test, y_test = X[train_index], y[train_index], X[test_index], y[test_index]
+
+        # Preallocate memory to hold error terms
+        w = np.empty((M,K_inner,len(lambdas)))
+        rlr_test_error = np.empty((K_inner,len(lambdas)))
+        h_test_error = np.empty((K_inner,len(h_units)))
+        errors = []
+
+        # Initiating inner loop
+        for i2, (train_index_inn, test_index_inn) in enumerate(CV.split(X,y)): 
+            print('\n Inner fold: {0}/{1}'.format(i2+1,K))
+
+            # Fetch appropriate training and test data
+            X_train_inn, y_train_inn, X_test_inn, y_test_inn = X_train[train_index_inn], y_train[train_index_inn], X_train[test_index_inn], y_train[test_index_inn]
+
+
+            # Converting testdata to PyTorch tensors
+            X_train_tensor = torch.Tensor(X_train_inn)
+            y_train_tensor = torch.Tensor(np.reshape(y_train_inn, (len(y_train_inn), -1)))
+            X_test_tensor = torch.Tensor(X_test_inn)
+            y_test = torch.Tensor(y_test_inn)
+
+            # Pre-calculate matrices
+            Xty_inn = X_train_inn.T @ y_train_inn
+            XtX_inn = X_train_inn.T @ X_train_inn
+            
+            for i3, lambda_n in enumerate(lambdas):
+                # Estimating the optimal lamba value
+                lambdaI = lambda_n * np.eye(M)
+                
+                # Calculate weights
+                w[:,i2,i3] = np.linalg.solve(XtX_inn+lambdaI,Xty_inn).squeeze()
+
+                # Insert Mean Squared Error into the array
+                rlr_test_error[i2,i3] = np.square(y_test_inn-X_test_inn @ w[:,i2,i3].T).mean(axis=0)
+
+
+            ###################################
+            # Det er ret sketchy her fra (som i kan se har jeg været inspireret af kaspers model, ved ikke om det er for meget though)
+
+            # Training ANN
+            net, final_loss, learning_curve = train_neural_net(model,
+                                                       loss_fn,
+                                                       X=X_train,
+                                                       y=y_train,
+                                                       n_replicates=3,
+                                                       max_iter=max_iter)
+    
+            print('\n\tBest loss: {}\n'.format(final_loss))
+
+            # Determine estimated class labels for test set
+            y_sigmoid = net(X_test) # activation of final note, i.e. prediction of network
+            y_test_est = (y_sigmoid > .5).type(dtype=torch.uint8) # threshold output of sigmoidal function
+            y_test = y_test.type(dtype=torch.uint8)
+            # Determine errors and error rate
+            e = (y_test_est != y_test)
+            error_rate = (sum(e).type(torch.float)/len(y_test)).data.numpy()
+            errors.append(error_rate) # store error rate for current CV fold
+
+    
+
+    
+    
+    
+    
+    end_time = time.time()
+
+    runtime = end_time - start_time
+    print("Runtime:", runtime, "seconds")
+    
+
+
+
 
 
 
@@ -232,8 +320,7 @@ def linear_regression(X, y, attributes, K, K_inner, lambdas):
 
 
 #### Extracting base data:
-X, y, attributes, data_values, one_k = dataprep()
-N, M = X.shape   
+X, y, attributes, data_values, one_k = dataprep()   
 
 
 #### Analysing 'Seasons' influence with PCA as for P.1:
@@ -246,7 +333,11 @@ K_inner = K
 lambdas = np.power(10.,range(-2,8))
 linear_regression(X, y, attributes, K, K_inner, lambdas)
 
-
+#### ANN model, part B:
+h_units = range(1,10)     # number of hidden units
+K = 10
+K_inner = K
+lambdas = range(1,101)
 
 #### Linear regression model, part A:
 K = 10
