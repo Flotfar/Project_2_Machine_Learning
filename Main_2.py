@@ -383,3 +383,7 @@ K1 = 10
 K2 = 10
 lambdas = range(1,100)
 compare_models(X, y, K1, K2, lambdas, h_units)
+
+
+
+
