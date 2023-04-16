@@ -5,8 +5,9 @@ import time
 import torch
 from sklearn import model_selection
 from sklearn.preprocessing import OneHotEncoder
-from sklearn.linear_model import Ridge, LinearRegression
-from toolbox_02450 import rlr_validate, train_neural_net
+from sklearn.linear_model import Ridge, LinearRegression, LogisticRegression
+from sklearn import model_selection, linear_model, tree
+from toolbox_02450 import rlr_validate, train_neural_net, correlated_ttest
 from matplotlib import pyplot as plt
 from scipy.linalg import svd
 from matplotlib.pylab import figure, semilogx, loglog, xlabel, ylabel, legend, title, subplot, show, grid
@@ -66,7 +67,7 @@ def dataprep ():
     Y = (Y_raw - np.mean(Y_raw))/np.std(Y_raw)
 
     print("Data loaded succesfully. \n")
-    return X, Y, attributes, data_values, one_k
+    return X, Y, Y_raw, attributes, data_values, one_k
 
 # Re-computing PCA for 'Season' influence:
 def PCA(data_values, one_k):
@@ -287,7 +288,7 @@ def compare_models(X, y, K1, K2, lambdas, h_units):
                 model = ANN_model(M, h)
 
                 # Training the ANN
-                net, final_loss, learning_curve = train_neural_net(model, loss_fn, X=X_train_tensor, y=y_train_tensor, n_replicates=n_replicates, max_iter=max_iter)
+                net, final_loss, learning_curve = train_neural_net(model, loss_fn, X=X_train_tensor, y=y_train_tensor, n_replicates=n_replicates , max_iter=max_iter)
 
                 # Calculate y prediction and convert it to np array
                 y_test_est = net(X_test_tensor)
@@ -357,6 +358,192 @@ def compare_models(X, y, K1, K2, lambdas, h_units):
     print(result_table)
 
 
+# Comparing clasification models (Logreg, ANN, baseline):
+def compare_classification_models(X, y_raw, K1, K2, lambdas, tree_depths, ozone_threshold, alpha, attributes):
+    
+    N, M = X.shape
+
+    #discitizing the y-values
+    y_dis = np.asarray([1 if ozone_value > ozone_threshold else 0 for ozone_value in y_raw])
+    print(y_dis)
+
+    # Create crossvalidation partition for the loops
+    # rand.state = subtracting the same 'random' set every run
+    CV_out = model_selection.KFold(K1, shuffle=True, random_state=42)
+    CV_inn = model_selection.KFold(K2, shuffle=True, random_state=42)
+
+
+    # Creating empty result array [0]K1-Fold, [1-2]RLR MSE, [3-4]ANN MSE, [5]Baseline MSE:
+    results = np.zeros((K1, 6))
+    results_label = np.array(["Fold", "opt-tree-depth", "ct-MSE", "l-val", "l-MSE", "b-MSE"])
+
+    # print('Initiating training of model of type:\n{}\n'.format(str(model())))
+    start_time = time.time()
+    
+    ###################################
+    # Starting up the training:
+    ###################################
+
+    #### Initiating outer loop ####
+    for i, (train_index, test_index) in enumerate(CV_out.split(X,y)): 
+        print('\n Outer fold: {0}/{1}'.format(i+1,K1))
+
+        # Fetch appropriate training and test data
+        X_train, y_train, X_test, y_test = X[train_index], y_dis[train_index], X[test_index], y_dis[test_index]
+        
+        # Preallocate memory to hold error terms for classification tree "ct", linear reg "lr"
+        ct_test_error = np.empty((K2,len(tree_depths)))
+        lr_test_error = np.empty((K2,len(lambdas)))
+
+        #### Initiating inner loop ####
+        for i2, (train_index_inn, test_index_inn) in enumerate(CV_inn.split(X_train,y_train)): 
+            print('\n Inner fold: {0}/{1}'.format(i2+1,K2))
+
+            # Fetch appropriate training and test data
+            X_train_inn, y_train_inn, X_test_inn, y_test_inn = X_train[train_index_inn], y_train[train_index_inn], X_train[test_index_inn], y_train[test_index_inn]
+
+            # Converting testdata to PyTorch tensors
+            X_train_tensor = torch.Tensor(X_train_inn)
+            y_train_tensor = torch.Tensor(np.reshape(y_train_inn, (len(y_train_inn), -1)))
+            X_test_tensor = torch.Tensor(X_test_inn)
+
+            #### Training LR model ####
+            
+            for i3, lambda_n in enumerate(lambdas):
+                # Instantiate new log reg model with different lambda values
+                log_reg = LogisticRegression(C=lambda_n)
+
+                model_log = log_reg.fit(X_train_inn, y_train_inn)
+                # Calculate model prediction
+                y_pred_log_reg = model_log.predict(X_test_inn)
+                
+                # Insert misclassified observation rate into array
+                lr_test_error[i2,i3] = np.sum(y_pred_log_reg != y_test_inn) / len(y_test_inn)
+
+
+            #### Training CT models ####
+
+            for i4, tree_depth in enumerate(tree_depths):
+                # Instantiate new tree model with different tree depths
+                dtc = tree.DecisionTreeClassifier(criterion='gini', max_depth=tree_depth)
+                model_dtc = dtc.fit(X_train_inn,y_train_inn)
+
+                # Calculate model prediction
+                y_pred_dtc = model_dtc.predict(X_test_inn)
+
+                # Insert misclassified observation rate into array
+                ct_test_error[i2, i4] = np.sum(y_pred_dtc != y_test_inn) / len(y_test_inn)
+
+        # Convert np arrays to tensors
+        X_train_tensor = torch.Tensor(X_train)
+        y_train_tensor = torch.Tensor(np.reshape(y_train, (len(y_train), -1)))
+        X_test_tensor = torch.Tensor(X_test)
+
+
+
+
+        #(LR) Calculate the optimal lambda
+        opt_lambda = lambdas[np.argmin(np.mean(lr_test_error,axis=0))] 
+        #(CT) Calculate the optimal tree depth
+        opt_tree_depth = tree_depths[np.argmin(np.mean(ct_test_error,axis=0))]
+
+        #(LR) creating LR model with optimal 'opt_lambda'
+        model_log = LogisticRegression(C=opt_lambda).fit(X_train_tensor, y_train_tensor)
+        #(CT) creating CT model with optimal 'opt_tree_depth'
+        model_dt = tree.DecisionTreeClassifier(criterion='gini', max_depth=opt_tree_depth).fit(X_train_tensor, y_train_tensor)
+
+        #(LR) predicting y
+        y_test_log_reg = model_log.predict(X_test_tensor)
+        #(CT) predicting y
+        y_test_dt = model_dt.predict(X_test_tensor)
+
+        #(CT) Calculating the opt ct MSE
+        opt_ct_mse =  np.sum(y_test_dt.flatten() != y_test.T) / len(y_test)
+        #(CT) Calculating the opt lambda MSE
+        opt_lambda_mse = np.sum(y_test_log_reg.flatten() != y_test.T) / len(y_test)
+
+
+        ################################################
+
+
+        #### Computing the Baseline with a no features model ####
+
+        positives = len(np.where(y_train == 1)[0])
+        negatives = len(np.where(y_train == 0)[0])
+        
+        # In case more positives than negatives
+        if positives < negatives:
+            test_error_baseline = len(np.where(y_test == 0)[0]) / len(y_test)
+        
+        # In case more neagatives than positives
+        else:   
+            test_error_baseline = len(np.where(y_test == 1)[0]) / len(y_test)
+        
+        ################################################
+
+
+        # Record the results
+        results[i, 0] = i+1
+        results[i, 1] = opt_tree_depth
+        results[i, 2] = round(opt_ct_mse, 3)
+        results[i, 3] = opt_lambda
+        results[i, 4] = round(opt_lambda_mse, 3)
+        results[i, 5] = round(test_error_baseline, 3)
+    
+
+    # creating titles for the result output and
+    # printing the array as a LaTeX table using tabulate
+    results_w_labels = np.row_stack((results_label, results))
+    result_table = tabulate(results_w_labels, headers='firstrow', tablefmt='latex_booktabs')
+
+    # defining runtime
+    end_time = time.time()
+    runtime = end_time - start_time
+
+    # printing results
+    print("Runtime:", runtime, "seconds")
+    print("\n Results:")
+    print(result_table)
+
+    # defining rho
+    rho = 1/K1
+    
+    # Defining the model errors into individual arrays
+    error_ct = np.asarray(results[:,2])
+    error_lr = np.asarray(results[:,4])
+    error_baseline = np.asarray(results[:,5])
+    
+
+    # Calculate the pairwise test error differences
+    abs_ct_lr = abs(error_ct - error_lr)
+    abs_ct_baseline = abs(error_ct - error_baseline)
+    abs_lr_baseline = abs(error_lr - error_baseline)
+
+    # Calculate p-value and confidence interval
+    pval_ct_lr, ci_ct_lr = correlated_ttest(abs_ct_lr, rho, alpha)
+    pval_ct_baseline, ci_ct_baseline = correlated_ttest(abs_ct_baseline, rho, alpha)
+    pval_lr_baseline, ci_lr_baseline = correlated_ttest(abs_lr_baseline, rho, alpha)
+    
+    # Print results
+    print('CT vs. LR: p-val =',  pval_ct_lr, 'CI =', ci_ct_lr)
+    print('CT vs. Baseline: p-val =', pval_ct_baseline, 'CI =', ci_ct_baseline)
+    print('LR vs. Baseline: p-val =', pval_lr_baseline, 'CI =', ci_lr_baseline)
+
+
+    #####################################
+    ### Training the logistical model ### 
+    #####################################
+    # the most common opt_lambda = 10.0 is used
+    opt_lambda = 10.0
+    
+    # training the logistical model
+    model = LogisticRegression(C=opt_lambda).fit(X, y_dis)
+    
+    # getting the attribute 
+    print(attributes)
+    print(model.coef_[0],3)
+
+
 
 #############################################
 ####             Main code               ####
@@ -364,7 +551,7 @@ def compare_models(X, y, K1, K2, lambdas, h_units):
 
 
 #### Extracting base data:
-X, y, attributes, data_values, one_k = dataprep()   
+X, y, y_raw, attributes, data_values, one_k = dataprep()   
 
 
 #### Analysing 'Seasons' influence with PCA as for P.1:
@@ -375,15 +562,23 @@ X, y, attributes, data_values, one_k = dataprep()
 K = 10
 K_inner = K
 lambdas = np.power(10.,range(-2,8))
-# linear_regression(X, y, attributes, K, lambdas)
+#linear_regression(X, y, attributes, K, lambdas)
 
 #### Comparing models, part B:
 h_units = range(1,11)     # number of hidden units
 K1 = 10
 K2 = 10
 lambdas = range(1,100)
-compare_models(X, y, K1, K2, lambdas, h_units)
+# compare_models(X, y, K1, K2, lambdas, h_units)
 
+#### Comparing classification models:
+tree_depths = range(1,11)     # classification tree depth
+K1 = 10
+K2 = 10
+lambdas = np.power(10.,range(-2,8))
+ozone_threshold = 20
+alpha = 0.05 #used for 95 % CI
+compare_classification_models(X, y_raw, K1, K2, lambdas, tree_depths, ozone_threshold, alpha, attributes)
 
 
 
