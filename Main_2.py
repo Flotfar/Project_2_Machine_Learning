@@ -227,7 +227,7 @@ def compare_models(X, y, K1, K2, lambdas, h_units):
     # Defining loss function
     loss_fn = torch.nn.BCELoss()
 
-    # Creating empty result array [0]K1-Fold, [1-2]RLR MSE, [3-4]ANN MSE, [5]Baseline MSE:
+    # Creating empty result array [0]K1-Fold, [1-2]ANN MSE, [3-4]RLR MSE, [5]Baseline MSE:
     results = np.zeros((K1, 6))
     results_label = np.array(["Fold", "h-val", "h-MSE", "l-val", "l-MSE", "b-MSE"])
 
@@ -343,6 +343,11 @@ def compare_models(X, y, K1, K2, lambdas, h_units):
         results[i, 5] = round(lr_mse, 3)
     
 
+    # Use function from toolbox to determine p-value and confidence interval
+    p_RLR_ANN, CI_RLR_ANN = correlated_ttest(abs(results[:,2]-results[:,4]), 1/10, 0.05)
+    p_ANN_base, CI_ANN_base = correlated_ttest(abs(results[:,2]-results[:,5]), 1/10, 0.05)
+    p_RLR_base, CI_RLR_base = correlated_ttest(abs(results[:,4]-results[:,5]), 1/10, 0.05)
+    
     # creating titles for the result output and
     # printing the array as a LaTeX table using tabulate
     results_w_labels = np.row_stack((results_label, results))
@@ -356,6 +361,10 @@ def compare_models(X, y, K1, K2, lambdas, h_units):
     print("Runtime:", runtime, "seconds")
     print("\n Results:")
     print(result_table)
+    print()
+    print(f"ANN vs. RLR: \np = {p_RLR_ANN}, Confidence interval = {CI_RLR_ANN}\n")
+    print(f"RLR vs. baseline: \np = {p_RLR_base}, Confidence interval = {CI_RLR_base}\n")
+    print(f"ANN vs. baseline: \np = {p_ANN_base}, Confidence interval = {CI_ANN_base}\n")
 
 
 # Comparing clasification models (Logreg, ANN, baseline):
